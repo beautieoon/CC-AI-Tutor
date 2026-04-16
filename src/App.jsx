@@ -19,7 +19,14 @@ const COMP = [
 ];
 const OPEN_Q = { question:"Now I'm curious — why do you think the caterpillar decided to spin the chrysalis right there, on that branch?", k2_opts:["It felt safe 🌿","It was tired 😴","I don't know 🤔"], placeholder:"What do you think? (any answer works)" };
 const KIRA_OPEN_REPLIES = ["That's a really interesting way to think about it.","I hadn't thought of it that way — I like that.","You might be right. The story doesn't say for sure.","That makes a lot of sense to me."];
-const KIRA_SCRIPTS = { easy:"You read that smoothly. I could tell you were comfortable with it. I keep wondering — what do you think the caterpillar was thinking while it waited inside?", medium:"You made it through the whole thing. That's what matters. I'm curious — do you think the butterfly knew it used to be a caterpillar?", hard:"You made it through the whole thing. That's what matters. I wonder what it feels like to wake up as something completely different." };
+const KIRA_SCRIPTS = {
+  easy_done:     "You read that smoothly — I could tell. I keep wondering: what do you think the caterpillar was thinking while it waited inside?",
+  easy_timeout:  "You said it felt easy! I noticed you made it through most of the story. Next time you might fly through the whole thing.",
+  medium_done:   "You made it through the whole thing — that's what matters. I'm curious, do you think the butterfly knew it used to be a caterpillar?",
+  medium_timeout:"You kept going even when it got tricky. That takes something. I wonder what part felt hardest for you.",
+  hard_done:     "You said it felt really tough — but you finished it. That's the part I want you to remember. I wonder what it feels like to do something hard and still make it through.",
+  hard_timeout:  "That was a lot to take on. I'm glad you tried. Sometimes a story needs a few reads before it feels like yours.",
+};
 
 // ── Speech ────────────────────────────────────────────────────────────────────
 const speak = (text, onEnd) => {
@@ -570,7 +577,8 @@ const PageGuided = ({onNext}) => {
 
   useEffect(()=>{setKiraTalking(true);speak("Let's start reading! Tap the mic when you're ready.",()=>setKiraTalking(false));return()=>stopSpeech();},[]);
 
-  const finish=useCallback(()=>{setDone(true);setRec(false);clearInterval(tr.current);clearInterval(wr.current);},[]);
+  const [completedReading,setCompletedReading]=useState(false);
+  const finish=useCallback((timedOut=false)=>{setDone(true);setRec(false);setCompletedReading(!timedOut);clearInterval(tr.current);clearInterval(wr.current);},[]);
 
   // 预览朗读：Kira 嘴巴动 + 段落按词高亮
   const handlePreview=()=>{
@@ -599,8 +607,8 @@ const PageGuided = ({onNext}) => {
     stopSpeech();setPreviewing(false);setKiraTalking(false);
     clearInterval(pr.current);setPreviewIdx(-1);
     setRec(true);setWIdx(0);
-    tr.current=setInterval(()=>setTimer(t=>{if(t<=1){finish();return 0;}return t-1;}),1000);
-    wr.current=setInterval(()=>setWIdx(i=>{if(i>=WORDS.length-1){finish();return i;}return i+1;}),480);
+    tr.current=setInterval(()=>setTimer(t=>{if(t<=1){finish(true);return 0;}return t-1;}),1000);
+    wr.current=setInterval(()=>setWIdx(i=>{if(i>=WORDS.length-1){finish(false);return i;}return i+1;}),480);
     setTimeout(()=>{const m="Tricky word — chrys·A·lis. Keep going!";setKiraMsg(m);setKiraTalking(true);speak(m,()=>setKiraTalking(false));},7000);
   };
   useEffect(()=>{if(!rec&&!done&&!previewing)return;ar.current=setInterval(()=>setF(x=>x+1),80);return()=>clearInterval(ar.current);},[rec,done,previewing]);
@@ -662,7 +670,7 @@ const PageGuided = ({onNext}) => {
           </>
         )}
         {rec&&<div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6}}><div style={{width:62,height:62,borderRadius:"50%",background:"#FF4757",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,color:"#fff",boxShadow:"0 0 0 10px rgba(255,71,87,.12)"}}>🎙</div><span style={{fontSize:12,color:"#FF4757",fontWeight:600}}>Recording...</span></div>}
-        {done&&<div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10,animation:"fadeUp .4s ease"}}><div style={{fontSize:14,color:"#00C48C",fontWeight:600}}>Great job! 🎉</div><PrimaryBtn onClick={onNext}>Continue →</PrimaryBtn></div>}
+        {done&&<div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10,animation:"fadeUp .4s ease"}}><div style={{fontSize:14,color:"#00C48C",fontWeight:600}}>Great job! 🎉</div><PrimaryBtn onClick={()=>onNext({completed:completedReading})}>Continue →</PrimaryBtn></div>}
       </div>
     </Shell>
   );
@@ -671,19 +679,23 @@ const PageGuided = ({onNext}) => {
 // ══════════════════════════════════════════════════════════════════════════════
 // PAGE 4 — Self Rating
 // ══════════════════════════════════════════════════════════════════════════════
-const PageRating = ({onNext}) => {
+const PageRating = ({onNext, completed}) => {
   const [sel,setSel]=useState(null);
   const [kiraTalking,setKiraTalking]=useState(false);
   const [replyDone,setReplyDone]=useState(false);
+  const [kiraMood,setKiraMood]=useState("neutral");
   const replies={easy:"Glad it felt good.",medium:"You kept going — that's what matters.",hard:"That's okay — tricky parts help you grow."};
   useEffect(()=>{setKiraTalking(true);speak("How did that feel? Just tap one.",()=>setKiraTalking(false));return()=>stopSpeech();},[]);
   const handleSel=(val)=>{
     if(sel)return;setSel(val);stopSpeech();setKiraTalking(true);
+    if(val==="easy") setKiraMood("celebrating");
+    else if(val==="hard") setKiraMood("cautious");
+    else setKiraMood("neutral");
     speak(replies[val],()=>{setKiraTalking(false);setReplyDone(true);});
   };
   const opts=[{emoji:"😄",label:"That felt smooth",val:"easy"},{emoji:"😐",label:"A few tricky parts",val:"medium"},{emoji:"😓",label:"Really tough today",val:"hard"}];
   return (
-    <Shell progress={64} stage="Self-rating" kiraText={sel?replies[sel]:"How did that feel? Just tap one."} kiraTalking={kiraTalking}>
+    <Shell progress={64} stage="Self-rating" kiraText={sel?replies[sel]:"How did that feel? Just tap one."} kiraTalking={kiraTalking} kiraMood={kiraMood}>
       <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",padding:"40px 48px"}}>
         <div style={{width:"100%",maxWidth:460}}>
           <div style={{fontSize:11,fontWeight:700,color:"#B0A8D8",letterSpacing:1.5,marginBottom:6}}>HOW DID IT FEEL?</div>
@@ -814,8 +826,9 @@ const PageComp = ({onNext}) => {
 // ══════════════════════════════════════════════════════════════════════════════
 // PAGE 6 — Results
 // ══════════════════════════════════════════════════════════════════════════════
-const PageResults = ({rating}) => {
-  const script=KIRA_SCRIPTS[rating]||KIRA_SCRIPTS.medium;
+const PageResults = ({rating, completed}) => {
+  const key=`${rating}_${completed?'done':'timeout'}`;
+  const script=KIRA_SCRIPTS[key]||KIRA_SCRIPTS.medium_done;
   const [phase,setPhase]=useState("celebrate");
   const [kiraTalking,setKiraTalking]=useState(false);
   const [f,setF]=useState(0);
@@ -964,6 +977,7 @@ const DraggableNav = ({page, goTo}) => {
 export default function App() {
   const [page,setPage]=useState(0);
   const [rating,setRating]=useState("medium");
+  const [readingCompleted,setReadingCompleted]=useState(true);
   const goTo=(n)=>{stopSpeech();setPage(n);};
   const renderPage=()=>{
     switch(page){
@@ -971,10 +985,10 @@ export default function App() {
       case 1: return <PageWarmup   onNext={()=>goTo(2)}/>;
       case 2: return <PageEcho     onNext={()=>goTo(3)}/>;
       case 3: return <PageEchoComplete onNext={()=>goTo(4)}/>;
-      case 4: return <PageGuided   onNext={()=>goTo(5)}/>;
-      case 5: return <PageRating   onNext={r=>{setRating(r);goTo(6);}}/>;
+      case 4: return <PageGuided   onNext={(r)=>{ setReadingCompleted(r.completed); goTo(5); }}/>;
+      case 5: return <PageRating   onNext={r=>{ setRating(r); goTo(6); }} completed={readingCompleted}/>;
       case 6: return <PageComp     onNext={()=>goTo(7)}/>;
-      case 7: return <PageResults  rating={rating}/>;
+      case 7: return <PageResults  rating={rating} completed={readingCompleted}/>;
       default: return <PageIntro   onNext={()=>goTo(1)}/>;
     }
   };

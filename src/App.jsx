@@ -80,23 +80,23 @@ const speak = (text, onEnd) => {
   const v = voices.find(v=>/samantha|karen|moira|victoria|zira|google us english/i.test(v.name)) || voices.find(v=>v.lang==="en-US") || voices[0];
   if(v) utt.voice=v;
 
-  // 保底 fallback：某些浏览器 onend 不触发，按字数估算时长后强制回调
   let fired = false;
-  const fire = () => { if(!fired){ fired=true; onEnd?.(); } };
+  let resumeTimer;
+  // resumeTimer must be in fire's scope so fallbackTimer path also clears it
+  const fire = () => { if(!fired){ fired=true; clearInterval(resumeTimer); onEnd?.(); } };
   const fallbackMs = Math.max(2000, (text.length / 12) * 1000 / 0.92 + 800);
   const fallbackTimer = setTimeout(fire, fallbackMs);
+
+  // Chrome 长句子 bug：语音合成可能中途暂停，每500ms 强制 resume
+  resumeTimer = setInterval(() => {
+    if(window.speechSynthesis.paused) window.speechSynthesis.resume();
+  }, 500);
 
   utt.onend  = () => { clearTimeout(fallbackTimer); fire(); };
   utt.onerror= () => { clearTimeout(fallbackTimer); fire(); };
 
-  // Chrome 长句子 bug：语音合成可能中途暂停，每500ms 强制 resume
-  const resumeTimer = setInterval(() => {
-    if(window.speechSynthesis.paused) window.speechSynthesis.resume();
-  }, 500);
-  utt.onend = () => { clearTimeout(fallbackTimer); clearInterval(resumeTimer); fire(); };
-  utt.onerror= () => { clearTimeout(fallbackTimer); clearInterval(resumeTimer); fire(); };
-
-  window.speechSynthesis.speak(utt);
+  // Chrome cancel+speak race condition：等一个 tick 再播放
+  setTimeout(() => window.speechSynthesis.speak(utt), 50);
 };
 const stopSpeech = () => window.speechSynthesis?.cancel();
 

@@ -11,7 +11,7 @@ const callKiraAI = async (systemPrompt, userContext) => {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-5-20251001",
-        max_tokens: 80,
+        max_tokens: 150,
         system: systemPrompt,
         messages: [{ role: "user", content: userContext }]
       })
@@ -62,12 +62,12 @@ const COMP = [
 const OPEN_Q = { question:"Now I'm curious — why do you think the caterpillar decided to spin the chrysalis right there, on that branch?", k2_opts:["It felt safe 🌿","It was tired 😴","I don't know 🤔"], placeholder:"What do you think? (any answer works)" };
 const KIRA_OPEN_REPLIES = ["That's a really interesting way to think about it.","I hadn't thought of it that way — I like that.","You might be right. The story doesn't say for sure.","That makes a lot of sense to me."];
 const KIRA_SCRIPTS = {
-  easy_done:     "You read that smoothly — I could tell. I keep wondering: what do you think the caterpillar was thinking while it waited inside?",
-  easy_timeout:  "You said it felt easy! I noticed you made it through most of the story. Next time you might fly through the whole thing.",
-  medium_done:   "You made it through the whole thing — that's what matters. I'm curious, do you think the butterfly knew it used to be a caterpillar?",
-  medium_timeout:"You kept going even when it got tricky. That takes something. I wonder what part felt hardest for you.",
-  hard_done:     "You said it felt really tough — but you finished it. That's the part I want you to remember. I wonder what it feels like to do something hard and still make it through.",
-  hard_timeout:  "That was a lot to take on. I'm glad you tried. Sometimes a story needs a few reads before it feels like yours.",
+  easy_done:    "You read that smoothly — I could tell. I keep wondering: what do you think the caterpillar was thinking while it waited inside?",
+  easy_stopped: "You said it felt easy! I noticed you made it through most of the story. Next time you might fly through the whole thing.",
+  medium_done:  "You made it through the whole thing — that's what matters. I'm curious, do you think the butterfly knew it used to be a caterpillar?",
+  medium_stopped:"You kept going even when it got tricky. That takes something. I wonder what part felt hardest for you.",
+  hard_done:    "You said it felt really tough — but you finished it. That's the part I want you to remember. I wonder what it feels like to do something hard and still make it through.",
+  hard_stopped: "That was a lot to take on. I'm glad you tried. Sometimes a story needs a few reads before it feels like yours.",
 };
 
 // ── Speech ────────────────────────────────────────────────────────────────────
@@ -536,7 +536,7 @@ const PageEcho = ({onNext}) => {
     setPhase("recording"); setSecs(0);
     tr.current=setInterval(()=>setSecs(s=>s+1),1000);
     ar.current=setInterval(()=>setF(x=>x+1),80);
-    setTimeout(()=>stopRec(),6000);
+    setTimeout(()=>stopRec(),15000);
   };
   const stopRec=()=>{ clearInterval(tr.current); clearInterval(ar.current); setPhase("done_sentence"); };
   useEffect(()=>()=>{ clearInterval(tr.current); clearInterval(ar.current); stopSpeech(); },[]);
@@ -607,7 +607,6 @@ const PageEcho = ({onNext}) => {
 // ══════════════════════════════════════════════════════════════════════════════
 const PageGuided = ({onNext}) => {
   const [rec,setRec]=useState(false);
-  const [timer,setTimer]=useState(60);
   const [wIdx,setWIdx]=useState(-1);       // 学生朗读时的高亮词
   const [previewIdx,setPreviewIdx]=useState(-1); // "Hear it first" 播放时的高亮词
   const [kiraMsg,setKiraMsg]=useState(null);
@@ -615,12 +614,17 @@ const PageGuided = ({onNext}) => {
   const [f,setF]=useState(0);
   const [kiraTalking,setKiraTalking]=useState(false);
   const [previewing,setPreviewing]=useState(false); // 正在预览朗读
-  const tr=useRef(),wr=useRef(),ar=useRef(),pr=useRef();
+  const wr=useRef(),ar=useRef(),pr=useRef(),silenceTimer=useRef();
 
   useEffect(()=>{setKiraTalking(true);speak("Let's start reading! Tap the mic when you're ready.",()=>setKiraTalking(false));return()=>stopSpeech();},[]);
 
   const [completedReading,setCompletedReading]=useState(false);
-  const finish=useCallback((timedOut=false)=>{setDone(true);setRec(false);setCompletedReading(!timedOut);clearInterval(tr.current);clearInterval(wr.current);},[]);
+
+  // completed=true: 读完全文（最后一词+3s静默）; completed=false: 主动点Done
+  const finish=useCallback((completed)=>{
+    setDone(true);setRec(false);setCompletedReading(completed);
+    clearInterval(wr.current);clearTimeout(silenceTimer.current);
+  },[]);
 
   // 预览朗读：Kira 嘴巴动 + 段落按词高亮
   const handlePreview=()=>{
@@ -631,7 +635,6 @@ const PageGuided = ({onNext}) => {
       return;
     }
     setPreviewing(true);setKiraTalking(true);setPreviewIdx(0);
-    // 按平均字速推进高亮，和语音大致同步
     const msPerWord = (WORDS.join(" ").length / 12) * 1000 / 0.92 / WORDS.length;
     let idx=0;
     pr.current=setInterval(()=>{
@@ -649,12 +652,19 @@ const PageGuided = ({onNext}) => {
     stopSpeech();setPreviewing(false);setKiraTalking(false);
     clearInterval(pr.current);setPreviewIdx(-1);
     setRec(true);setWIdx(0);
-    tr.current=setInterval(()=>setTimer(t=>{if(t<=1){finish(true);return 0;}return t-1;}),1000);
-    wr.current=setInterval(()=>setWIdx(i=>{if(i>=WORDS.length-1){finish(false);return i;}return i+1;}),480);
+    // 480ms/词推进高亮；到最后一词时启动3s静默，3s后 completed=true
+    wr.current=setInterval(()=>setWIdx(i=>{
+      if(i>=WORDS.length-1){
+        clearInterval(wr.current);
+        silenceTimer.current=setTimeout(()=>finish(true),3000);
+        return i;
+      }
+      return i+1;
+    }),480);
     setTimeout(()=>{const m="Tricky word — chrys·A·lis. Keep going!";setKiraMsg(m);setKiraTalking(true);speak(m,()=>setKiraTalking(false));},7000);
   };
   useEffect(()=>{if(!rec&&!done&&!previewing)return;ar.current=setInterval(()=>setF(x=>x+1),80);return()=>clearInterval(ar.current);},[rec,done,previewing]);
-  useEffect(()=>()=>{clearInterval(tr.current);clearInterval(wr.current);clearInterval(ar.current);clearInterval(pr.current);},[]);
+  useEffect(()=>()=>{clearInterval(wr.current);clearInterval(ar.current);clearInterval(pr.current);clearTimeout(silenceTimer.current);},[]);
 
   // 当前高亮词：预览用 previewIdx，录音用 wIdx
   const activeIdx = previewing ? previewIdx : wIdx;
@@ -666,9 +676,6 @@ const PageGuided = ({onNext}) => {
         <div style={{display:"flex",alignItems:"center",gap:7,background:"#fff",border:`1.5px solid ${rec?"#FFD0D0":"#EDE9FF"}`,borderRadius:99,padding:"6px 14px"}}>
           <span style={{width:8,height:8,borderRadius:"50%",background:rec?"#FF4757":done?"#00C48C":"#D1D5DB",boxShadow:rec?"0 0 0 4px rgba(255,71,87,.18)":"none"}}/>
           <span style={{fontSize:12,fontWeight:700,color:rec?"#FF4757":done?"#00C48C":"#9CA3AF"}}>{rec?"REC":done?"DONE":"READY"}</span>
-        </div>
-        <div style={{background:"#fff",border:`1.5px solid ${timer<10?"#FFD0D0":"#EDE9FF"}`,borderRadius:99,padding:"6px 16px"}}>
-          <span style={{fontSize:15,fontWeight:800,fontVariantNumeric:"tabular-nums",color:timer<10?"#FF4757":"#3B2D8A"}}>{Math.floor(timer/60)}:{String(timer%60).padStart(2,"0")}</span>
         </div>
         <div style={{flex:1}}/>
         <div style={{fontSize:12,color:"#B0A8D8",fontWeight:500}}>The Butterfly · Grade 3</div>
@@ -715,7 +722,7 @@ const PageGuided = ({onNext}) => {
           <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
             <div style={{width:62,height:62,borderRadius:"50%",background:"#FF4757",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,color:"#fff",boxShadow:"0 0 0 10px rgba(255,71,87,.12)"}}>🎙</div>
             <span style={{fontSize:12,color:"#FF4757",fontWeight:600}}>Recording...</span>
-            <button onClick={()=>{clearInterval(tr.current);clearInterval(wr.current);setRec(false);setTimer(60);setWIdx(-1);setKiraMsg(null);}} style={{marginTop:4,background:"none",border:"none",fontSize:11,color:"#C4B5FD",cursor:"pointer",textDecoration:"underline",textUnderlineOffset:2}}>↺ start over</button>
+            <button onClick={()=>{clearInterval(wr.current);clearTimeout(silenceTimer.current);setRec(false);setWIdx(-1);setKiraMsg(null);}} style={{marginTop:4,background:"none",border:"none",fontSize:11,color:"#C4B5FD",cursor:"pointer",textDecoration:"underline",textUnderlineOffset:2}}>↺ start over</button>
           </div>
         )}
         {done&&<div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10,animation:"fadeUp .4s ease"}}><div style={{fontSize:14,color:"#00C48C",fontWeight:600}}>Great job! 🎉</div><PrimaryBtn onClick={()=>onNext({completed:completedReading})}>Continue →</PrimaryBtn></div>}
@@ -790,7 +797,7 @@ const PageComp = ({onNext}) => {
       if(isLast) setTimeout(()=>{say(OPEN_Q.question);setShowOpen(true);},500);
       else setTimeout(()=>{setQIdx(1);setSel(null);setAttempt(0);setRevealed(false);setHighlight(false);setShowHintBtn(false);setTimeout(()=>say(`I wonder — ${COMP[1].q}`),300);},700);
     } else if(attempt===0){
-      setShowHintBtn(true);setHighlight(true);
+      setShowHintBtn(true);
       say("I see why you'd think that — the answer is somewhere in the story. Can you find it?",()=>{setAttempt(1);setSel(null);});
     } else {
       say(`The answer is "${q.opts[q.ans]}" — the story tells us right in the highlighted part.`);
@@ -878,10 +885,10 @@ const PageComp = ({onNext}) => {
 // ══════════════════════════════════════════════════════════════════════════════
 // PAGE 6 — Results
 // ══════════════════════════════════════════════════════════════════════════════
-const PageResults = ({rating, completed, onRestart}) => {
-  const key=`${rating}_${completed?'done':'timeout'}`;
-  const starCount={easy_done:3,easy_timeout:2,medium_done:2,medium_timeout:1,hard_done:2,hard_timeout:1}[key]??1;
-  const moodMap={easy_done:"happy",easy_timeout:"neutral",medium_done:"neutral",medium_timeout:"neutral",hard_done:"cautious",hard_timeout:"cautious"};
+const PageResults = ({rating, completed}) => {
+  const key=`${rating}_${completed?'done':'stopped'}`;
+  const ratingLabel={easy_done:"Great effort!",easy_stopped:"Nice work!",medium_done:"Great effort!",medium_stopped:"Keep it up!",hard_done:"Great effort!",hard_stopped:"Keep it up!"}[key]??"Keep it up!";
+  const moodMap={easy_done:"celebrating",easy_stopped:"neutral",medium_done:"neutral",medium_stopped:"neutral",hard_done:"cautious",hard_stopped:"cautious"};
 
   const [phase,setPhase]=useState("celebrate");
   const [kiraTalking,setKiraTalking]=useState(false);
@@ -894,7 +901,7 @@ const PageResults = ({rating, completed, onRestart}) => {
     const fallback=KIRA_SCRIPTS[key]||KIRA_SCRIPTS.medium_done;
     const context=`The child just finished reading a story called "The Butterfly".
 Self-rating: ${rating} (easy/medium/hard scale).
-Did they finish reading before the timer: ${completed?"yes":"no"}.
+Did they read all the way to the end: ${completed?"yes, finished the whole story":"no, chose to stop early"}.
 Generate Kira's closing reflection for this specific child right now.`;
     callKiraAI(KIRA_SYSTEM_MIRROR,context).then(aiReply=>{
       setScript(aiReply||fallback);
@@ -932,18 +939,17 @@ Generate Kira's closing reflection for this specific child right now.`;
           <div key={i} style={{position:"absolute",width:r*2,height:r*2,borderRadius:"50%",border:"1px solid rgba(255,255,255,0.06)",top:"50%",left:"50%",transform:"translate(-50%,-50%)",pointerEvents:"none"}}/>
         ))}
         <KiraCharacter size={130} mood={moodMap[key]||"neutral"} talking={kiraTalking} celebrating={key==="easy_done"&&!kiraTalking}/>
-        <div style={{display:"flex",gap:8,marginTop:-6}}>
-          {[0,1,2].map(i=>(
-            <svg key={i} width="36" height="36" viewBox="0 0 24 24"
-              style={{transform:starsVisible&&i<starCount?"scale(1)":"scale(0)",transition:`transform .45s cubic-bezier(.34,1.56,.64,1) ${i*130}ms`,filter:i<starCount?"drop-shadow(0 0 8px rgba(253,230,138,0.85))":"none"}}>
-              <polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"
-                fill={i<starCount?"#FDE68A":"rgba(255,255,255,0.18)"}
-                stroke={i<starCount?"#F59E0B":"rgba(255,255,255,0.12)"} strokeWidth="1.5"/>
-            </svg>
-          ))}
-        </div>
-        <div style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,0.72)",letterSpacing:2,marginTop:6}}>
-          {completed?"YOU FINISHED IT":"GREAT EFFORT"}
+        <div style={{
+          marginTop:8,
+          fontSize:15,fontWeight:800,color:"#fff",
+          background:"rgba(255,255,255,0.18)",
+          borderRadius:99,padding:"7px 20px",
+          letterSpacing:.5,
+          opacity:starsVisible?1:0,
+          transform:starsVisible?"translateY(0)":"translateY(8px)",
+          transition:"opacity .4s ease, transform .4s ease"
+        }}>
+          {ratingLabel}
         </div>
       </div>
 
@@ -1006,14 +1012,8 @@ Generate Kira's closing reflection for this specific child right now.`;
 
       {/* ── Fixed bottom CTA ── */}
       <div style={{position:"fixed",bottom:0,left:0,right:0,display:"flex",justifyContent:"center",pointerEvents:"none"}}>
-        <div style={{width:"100%",maxWidth:640,padding:"12px 20px 28px",background:"linear-gradient(to top,#F6F4FF 60%,transparent)",display:"flex",gap:10,pointerEvents:"all"}}>
-          <button onClick={()=>{stopSpeech();onRestart();}}
-            style={{flex:1,background:"#fff",border:"2px solid #EDE9FF",borderRadius:14,padding:"12px",fontSize:13,fontWeight:600,color:"#9B8FEE",cursor:"pointer",fontFamily:"inherit",transition:"border-color .15s"}}
-            onMouseEnter={e=>e.currentTarget.style.borderColor="#C4B5FD"}
-            onMouseLeave={e=>e.currentTarget.style.borderColor="#EDE9FF"}>
-            ↺ Try again
-          </button>
-          <PrimaryBtn style={{flex:2,fontSize:15,padding:"13px 28px"}}>Back to Home</PrimaryBtn>
+        <div style={{width:"100%",maxWidth:640,padding:"12px 20px 28px",background:"linear-gradient(to top,#F6F4FF 60%,transparent)",display:"flex",pointerEvents:"all"}}>
+          <PrimaryBtn style={{flex:1,fontSize:15,padding:"13px 28px"}}>Back to Home</PrimaryBtn>
         </div>
       </div>
     </div>

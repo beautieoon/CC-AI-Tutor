@@ -1,5 +1,47 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
+const callKiraAI = async (systemPrompt, userContext) => {
+  try {
+    const response = await fetch("/api/anthropic/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": import.meta.env.VITE_ANTHROPIC_KEY || "",
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-5-20251001",
+        max_tokens: 80,
+        system: systemPrompt,
+        messages: [{ role: "user", content: userContext }]
+      })
+    });
+    const data = await response.json();
+    return data.content?.[0]?.text || null;
+  } catch {
+    return null;
+  }
+};
+
+const KIRA_SYSTEM_SPARK = `You are Kira, a warm reading buddy for a child aged 6-9.
+Rules:
+- Max 2 sentences, never longer
+- Never say "great", "correct", "good job", or give scores
+- First sentence: genuinely engage with what the child said
+- Second sentence: end with a curious open question
+- Write at a grade 2 reading level
+- Sound like a curious friend, not a teacher`;
+
+const KIRA_SYSTEM_MIRROR = `You are Kira, a warm reading buddy for a child aged 6-9.
+Rules:
+- Max 2 sentences, never longer
+- Never say "great", "correct", "good job", or give scores
+- First sentence: reflect back their effort, not their performance
+- Second sentence: one wondering question that has no right answer
+- Write at a grade 2 reading level
+- If they said it was hard but they finished: acknowledge the contrast ("you said it was tough, but you made it through")
+- If they said it was easy but didn't finish: gently note progress without shame`;
+
 const WORDS = ["A","caterpillar","crawled","slowly","along","a","branch.","It","found","a","safe","spot","and","began","to","spin","a","chrysalis","around","itself.","Inside","the","chrysalis,","something","amazing","happened.","The","caterpillar","changed.","Days","later,","a","beautiful","butterfly","pushed","its","way","out","and","flew","into","the","bright","blue","sky."];
 const PASSAGE_TEXT = "A caterpillar crawled slowly along a branch. It found a safe spot and began to spin a chrysalis around itself. Inside the chrysalis, something amazing happened. The caterpillar changed. Days later, a beautiful butterfly pushed its way out and flew into the bright blue sky.";
 const ECHO_SENTENCES = [
@@ -669,7 +711,13 @@ const PageGuided = ({onNext}) => {
             <span style={{fontSize:12,color:"#B0A8D8"}}>{kiraTalking?"Wait for Kira...":previewing?"Follow along ✨":"Hear it first, or tap mic to start"}</span>
           </>
         )}
-        {rec&&<div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6}}><div style={{width:62,height:62,borderRadius:"50%",background:"#FF4757",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,color:"#fff",boxShadow:"0 0 0 10px rgba(255,71,87,.12)"}}>🎙</div><span style={{fontSize:12,color:"#FF4757",fontWeight:600}}>Recording...</span></div>}
+        {rec&&(
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
+            <div style={{width:62,height:62,borderRadius:"50%",background:"#FF4757",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,color:"#fff",boxShadow:"0 0 0 10px rgba(255,71,87,.12)"}}>🎙</div>
+            <span style={{fontSize:12,color:"#FF4757",fontWeight:600}}>Recording...</span>
+            <button onClick={()=>{clearInterval(tr.current);clearInterval(wr.current);setRec(false);setTimer(60);setWIdx(-1);setKiraMsg(null);}} style={{marginTop:4,background:"none",border:"none",fontSize:11,color:"#C4B5FD",cursor:"pointer",textDecoration:"underline",textUnderlineOffset:2}}>↺ start over</button>
+          </div>
+        )}
         {done&&<div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10,animation:"fadeUp .4s ease"}}><div style={{fontSize:14,color:"#00C48C",fontWeight:600}}>Great job! 🎉</div><PrimaryBtn onClick={()=>onNext({completed:completedReading})}>Continue →</PrimaryBtn></div>}
       </div>
     </Shell>
@@ -807,9 +855,13 @@ const PageComp = ({onNext}) => {
                 <div style={{fontSize:18,fontWeight:700,color:"#3B2D8A",marginBottom:20,lineHeight:1.5}}>{OPEN_Q.question}</div>
                 {!openDone&&<div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
                   {OPEN_Q.k2_opts.map((o,i)=><button key={i} onClick={()=>{
-                    const r=KIRA_OPEN_REPLIES[Math.floor(Math.random()*KIRA_OPEN_REPLIES.length)];
-                    setOpenReply(r);
-                    say(r,()=>setOpenDone(true));
+                    setOpenReply("...");
+                    const context = `The child answered the question "Why do you think the caterpillar chose that branch?" with: "${o}"`;
+                    callKiraAI(KIRA_SYSTEM_SPARK, context).then(aiReply => {
+                      const reply = aiReply || KIRA_OPEN_REPLIES[Math.floor(Math.random()*KIRA_OPEN_REPLIES.length)];
+                      setOpenReply(reply);
+                      say(reply, ()=>setOpenDone(true));
+                    });
                   }} style={{background:"#F2EFFF",border:"1.5px solid #C4B5FD",borderRadius:99,padding:"9px 16px",fontSize:13,color:"#4B3DB5",fontWeight:500,cursor:"pointer",fontFamily:"inherit"}}>{o}</button>)}
                 </div>}
                 {openDone&&<div style={{animation:"fadeUp .3s"}}><div style={{background:"#EEE8FF",borderRadius:16,padding:"16px 20px",marginBottom:16,display:"flex",gap:10,alignItems:"flex-start"}}><KiraAvatar size={36}/><p style={{margin:0,fontSize:15,color:"#3B2D8A",lineHeight:1.7,fontStyle:"italic"}}>"{openReply}"</p></div><PrimaryBtn onClick={onNext} style={{width:"100%"}}>See results →</PrimaryBtn></div>}
@@ -826,17 +878,40 @@ const PageComp = ({onNext}) => {
 // ══════════════════════════════════════════════════════════════════════════════
 // PAGE 6 — Results
 // ══════════════════════════════════════════════════════════════════════════════
-const PageResults = ({rating, completed}) => {
+const PageResults = ({rating, completed, onRestart}) => {
   const key=`${rating}_${completed?'done':'timeout'}`;
-  const script=KIRA_SCRIPTS[key]||KIRA_SCRIPTS.medium_done;
+  const starCount={easy_done:3,easy_timeout:2,medium_done:2,medium_timeout:1,hard_done:2,hard_timeout:1}[key]??1;
+  const moodMap={easy_done:"happy",easy_timeout:"neutral",medium_done:"neutral",medium_timeout:"neutral",hard_done:"cautious",hard_timeout:"cautious"};
+
   const [phase,setPhase]=useState("celebrate");
   const [kiraTalking,setKiraTalking]=useState(false);
+  const [starsVisible,setStarsVisible]=useState(false);
   const [f,setF]=useState(0);
+  const [selectedWord,setSelectedWord]=useState(null);
+  const [script,setScript]=useState("...");
+
   useEffect(()=>{
+    const fallback=KIRA_SCRIPTS[key]||KIRA_SCRIPTS.medium_done;
+    const context=`The child just finished reading a story called "The Butterfly".
+Self-rating: ${rating} (easy/medium/hard scale).
+Did they finish reading before the timer: ${completed?"yes":"no"}.
+Generate Kira's closing reflection for this specific child right now.`;
+    callKiraAI(KIRA_SYSTEM_MIRROR,context).then(aiReply=>{
+      setScript(aiReply||fallback);
+    });
+  },[]);
+
+  useEffect(()=>{
+    if(script==="...")return;
     const a=setInterval(()=>setF(x=>x+1),60);
-    setTimeout(()=>{clearInterval(a);setPhase("content");setTimeout(()=>{setKiraTalking(true);speak(script,()=>setKiraTalking(false));},400);},2200);
+    setTimeout(()=>{
+      clearInterval(a);setPhase("content");
+      setTimeout(()=>setStarsVisible(true),300);
+      setTimeout(()=>{setKiraTalking(true);speak(script,()=>setKiraTalking(false));},800);
+    },2200);
     return()=>{clearInterval(a);stopSpeech();};
   },[]);
+
   if(phase==="celebrate") return (
     <div style={{display:"flex",height:"100vh",alignItems:"center",justifyContent:"center",background:"linear-gradient(145deg,#EDEAFF,#F8F6FF)",flexDirection:"column",gap:20,position:"relative",overflow:"hidden"}}>
       {Array.from({length:16}).map((_,i)=>(
@@ -847,39 +922,101 @@ const PageResults = ({rating, completed}) => {
       <div style={{fontSize:15,color:"#9B8FEE",fontWeight:500}}>The Butterfly · Grade 3</div>
     </div>
   );
+
   return (
-    <Shell progress={100} stage="Done!" kiraText={script} kiraTalking={kiraTalking}>
-      <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",padding:"32px 48px"}}>
-        <div style={{width:"100%",maxWidth:500,animation:"fadeUp .5s ease"}}>
-          <div style={{display:"flex",justifyContent:"center",marginBottom:24}}>
-            <div style={{background:"linear-gradient(135deg,#DDD8FF,#EEE8FF)",borderRadius:18,padding:"18px 28px",display:"flex",alignItems:"center",gap:14}}>
-              <KiraAvatar size={56} talking={kiraTalking}/>
-              <div><div style={{fontSize:10,fontWeight:700,color:"#9B8FEE",letterSpacing:1.5,marginBottom:4}}>YOU FINISHED</div><div style={{fontSize:20,fontWeight:800,color:"#3B2D8A"}}>The Butterfly</div><div style={{fontSize:12,color:"#9B8FEE",marginTop:3}}>Grade 3 · 44 words</div></div>
-            </div>
-          </div>
-          <div style={{background:"#F2EFFF",borderRadius:16,padding:"18px 22px",marginBottom:14,border:"1.5px solid #DDD8FF"}}>
-            <div style={{fontSize:10,fontWeight:700,color:"#9B8FEE",letterSpacing:1.5,marginBottom:8}}>KIRA SAYS</div>
-            <p style={{margin:0,fontSize:15,color:"#3B2D8A",lineHeight:1.8,fontStyle:"italic"}}>"{script}"</p>
-          </div>
-          <div style={{background:"#fff",borderRadius:16,padding:"16px 20px",marginBottom:14,border:"1.5px solid #EDE9FF",boxShadow:"0 4px 16px rgba(108,92,231,.06)"}}>
-            <div style={{fontSize:10,fontWeight:700,color:"#B0A8D8",letterSpacing:1.5,marginBottom:10}}>KIRA WONDERS...</div>
-            <div style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:10}}><KiraAvatar size={26}/><p style={{margin:0,fontSize:14,color:"#4A4070",fontStyle:"italic",lineHeight:1.65}}>"I wonder what it feels like to wake up as something completely different."</p></div>
-            <AudioWaveBtn text="I wonder what it feels like to wake up as something completely different." label="Listen"/>
-          </div>
-          <div style={{background:"#fff",borderRadius:16,padding:"16px 20px",marginBottom:20,border:"1.5px solid #EDE9FF",boxShadow:"0 4px 16px rgba(108,92,231,.06)"}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
-              <div style={{fontSize:10,fontWeight:700,color:"#B0A8D8",letterSpacing:1.5}}>📖 THE STORY</div>
-              <div style={{fontSize:11,color:"#C4B5FD",display:"flex",alignItems:"center",gap:4}}><span>🔊</span><span>Tap any sentence</span></div>
-            </div>
-            <ClickableSentences/>
-            <div style={{marginTop:14,paddingTop:12,borderTop:"1px solid #EDE9FF",display:"flex",alignItems:"center",gap:10}}>
-              <AudioWaveBtn text={PASSAGE_TEXT} label="Play full story"/>
-            </div>
-          </div>
-          <PrimaryBtn style={{width:"100%"}}>Back to Home</PrimaryBtn>
+    <div style={{height:"100vh",display:"flex",flexDirection:"column",fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",background:"#F6F4FF",overflow:"hidden"}}>
+
+      {/* ── Hero zone ── */}
+      <div style={{background:"linear-gradient(160deg,#5B4FD8 0%,#8B7FE8 100%)",padding:"32px 24px 40px",display:"flex",flexDirection:"column",alignItems:"center",gap:6,position:"relative",overflow:"hidden",flexShrink:0}}>
+        {[100,170,240].map((r,i)=>(
+          <div key={i} style={{position:"absolute",width:r*2,height:r*2,borderRadius:"50%",border:"1px solid rgba(255,255,255,0.06)",top:"50%",left:"50%",transform:"translate(-50%,-50%)",pointerEvents:"none"}}/>
+        ))}
+        <KiraCharacter size={130} mood={moodMap[key]||"neutral"} talking={kiraTalking} celebrating={key==="easy_done"&&!kiraTalking}/>
+        <div style={{display:"flex",gap:8,marginTop:-6}}>
+          {[0,1,2].map(i=>(
+            <svg key={i} width="36" height="36" viewBox="0 0 24 24"
+              style={{transform:starsVisible&&i<starCount?"scale(1)":"scale(0)",transition:`transform .45s cubic-bezier(.34,1.56,.64,1) ${i*130}ms`,filter:i<starCount?"drop-shadow(0 0 8px rgba(253,230,138,0.85))":"none"}}>
+              <polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"
+                fill={i<starCount?"#FDE68A":"rgba(255,255,255,0.18)"}
+                stroke={i<starCount?"#F59E0B":"rgba(255,255,255,0.12)"} strokeWidth="1.5"/>
+            </svg>
+          ))}
+        </div>
+        <div style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,0.72)",letterSpacing:2,marginTop:6}}>
+          {completed?"YOU FINISHED IT":"GREAT EFFORT"}
         </div>
       </div>
-    </Shell>
+
+      {/* ── Scrollable content ── */}
+      <div style={{flex:1,overflowY:"auto",padding:"20px 20px 100px"}}>
+
+        {/* Single unified card */}
+        <div style={{background:"#fff",borderRadius:22,boxShadow:"0 8px 40px rgba(108,92,231,0.10)",border:"1.5px solid #EDE9FF",overflow:"hidden",animation:"fadeUp .4s ease"}}>
+
+          {/* Kira says */}
+          <div style={{padding:"22px 22px 18px",display:"flex",gap:12,alignItems:"flex-start"}}>
+            <div style={{flexShrink:0}}><KiraAvatar size={36} talking={kiraTalking}/></div>
+            <div>
+              <div style={{fontSize:10,fontWeight:700,color:"#9B8FEE",letterSpacing:1.5,marginBottom:6}}>KIRA SAYS</div>
+              <p style={{margin:0,fontSize:15,color:"#3B2D8A",lineHeight:1.8,fontStyle:"italic"}}>"{script}"</p>
+            </div>
+          </div>
+
+          <div style={{height:1,background:"#F3F0FF",margin:"0 20px"}}/>
+
+          {/* Vocab chips */}
+          <div style={{padding:"16px 22px"}}>
+            <div style={{fontSize:10,fontWeight:700,color:"#B0A8D8",letterSpacing:1.5,marginBottom:10}}>WORDS YOU LEARNED TODAY</div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              {HARD_WORDS.map((w,i)=>(
+                <button key={i} onClick={()=>{stopSpeech();setSelectedWord(w);}}
+                  style={{display:"flex",alignItems:"center",gap:6,background:selectedWord?.word===w.word?"#EDE9FF":"#F5F3FF",border:`1.5px solid ${selectedWord?.word===w.word?"#6C5CE7":"#C4B5FD"}`,borderRadius:99,padding:"7px 14px",cursor:"pointer",fontFamily:"inherit",transition:"all .15s"}}
+                  onMouseEnter={e=>{if(selectedWord?.word!==w.word)e.currentTarget.style.background="#EDE9FF";}}
+                  onMouseLeave={e=>{if(selectedWord?.word!==w.word)e.currentTarget.style.background="#F5F3FF";}}>
+                  <span style={{fontSize:13,fontWeight:700,color:"#4B3DB5"}}>{w.word}</span>
+                  <span style={{fontSize:11,color:"#9B8FEE"}}>🔊</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Word detail card */}
+            {selectedWord&&(
+              <div style={{marginTop:12,background:"linear-gradient(135deg,#F5F3FF,#EEE8FF)",borderRadius:16,padding:"18px 18px 14px",border:"1.5px solid #C4B5FD",position:"relative",animation:"fadeUp .2s ease"}}>
+                <button onClick={()=>{stopSpeech();setSelectedWord(null);}} style={{position:"absolute",top:10,right:12,background:"none",border:"none",fontSize:16,color:"#B0A8D8",cursor:"pointer",lineHeight:1}}>×</button>
+                <div style={{fontSize:24,fontWeight:900,color:"#3B2D8A",marginBottom:2}}>{selectedWord.word}</div>
+                <div style={{fontSize:12,color:"#9B8FEE",letterSpacing:2,marginBottom:10,fontWeight:500}}>{selectedWord.syl}</div>
+                <div style={{fontSize:13,color:"#4A4070",lineHeight:1.65,marginBottom:12}}>→ {selectedWord.def}</div>
+                <AudioWaveBtn text={`${selectedWord.word}. ${selectedWord.syl.replace(/·/g,' ')}. ${selectedWord.def}`} label={`Hear "${selectedWord.word}"`}/>
+              </div>
+            )}
+          </div>
+
+          <div style={{height:1,background:"#F3F0FF",margin:"0 20px"}}/>
+
+          {/* Read it again */}
+          <div style={{padding:"16px 22px 20px"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+              <div style={{fontSize:10,fontWeight:700,color:"#B0A8D8",letterSpacing:1.5}}>READ IT AGAIN</div>
+              <AudioWaveBtn text={PASSAGE_TEXT} label="Play all"/>
+            </div>
+            <ClickableSentences/>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Fixed bottom CTA ── */}
+      <div style={{position:"fixed",bottom:0,left:0,right:0,display:"flex",justifyContent:"center",pointerEvents:"none"}}>
+        <div style={{width:"100%",maxWidth:640,padding:"12px 20px 28px",background:"linear-gradient(to top,#F6F4FF 60%,transparent)",display:"flex",gap:10,pointerEvents:"all"}}>
+          <button onClick={()=>{stopSpeech();onRestart();}}
+            style={{flex:1,background:"#fff",border:"2px solid #EDE9FF",borderRadius:14,padding:"12px",fontSize:13,fontWeight:600,color:"#9B8FEE",cursor:"pointer",fontFamily:"inherit",transition:"border-color .15s"}}
+            onMouseEnter={e=>e.currentTarget.style.borderColor="#C4B5FD"}
+            onMouseLeave={e=>e.currentTarget.style.borderColor="#EDE9FF"}>
+            ↺ Try again
+          </button>
+          <PrimaryBtn style={{flex:2,fontSize:15,padding:"13px 28px"}}>Back to Home</PrimaryBtn>
+        </div>
+      </div>
+    </div>
   );
 };
 
@@ -979,6 +1116,7 @@ export default function App() {
   const [rating,setRating]=useState("medium");
   const [readingCompleted,setReadingCompleted]=useState(true);
   const goTo=(n)=>{stopSpeech();setPage(n);};
+
   const renderPage=()=>{
     switch(page){
       case 0: return <PageIntro    onNext={()=>goTo(1)}/>;
@@ -988,7 +1126,7 @@ export default function App() {
       case 4: return <PageGuided   onNext={(r)=>{ setReadingCompleted(r.completed); goTo(5); }}/>;
       case 5: return <PageRating   onNext={r=>{ setRating(r); goTo(6); }} completed={readingCompleted}/>;
       case 6: return <PageComp     onNext={()=>goTo(7)}/>;
-      case 7: return <PageResults  rating={rating} completed={readingCompleted}/>;
+      case 7: return <PageResults  rating={rating} completed={readingCompleted} onRestart={()=>goTo(0)}/>;
       default: return <PageIntro   onNext={()=>goTo(1)}/>;
     }
   };

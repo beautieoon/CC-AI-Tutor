@@ -415,10 +415,15 @@ const ClickablePassage = ({highlight, hintStart, hintEnd}) => {
 // ══════════════════════════════════════════════════════════════════════════════
 // PAGE 0 — Intro
 // ══════════════════════════════════════════════════════════════════════════════
-const PageIntro = ({onNext}) => {
+const INTRO_SCRIPTS = {
+  'K-2': "Hi! I'm Kira, your reading buddy! Today we have a story about a little caterpillar who changes into something amazing. Ready to find out what happens?",
+  '3-5': "Hi! I'm Kira, your reading buddy. Today's story is about a caterpillar that goes through an incredible change. I wonder — have you ever felt like you were becoming someone new?",
+};
+
+const PageIntro = ({onNext, gradeBand="3-5"}) => {
   const [talking,setTalking]=useState(false);
   const [ready,setReady]=useState(false);
-  const SCRIPT = "Hi! I'm Kira, your reading buddy. Today's story is about something that completely changes. I wonder — have you ever felt like you were turning into a different version of yourself?";
+  const SCRIPT = INTRO_SCRIPTS[gradeBand] || INTRO_SCRIPTS['3-5'];
   useEffect(()=>{
     const go=()=>{setTalking(true);speak(SCRIPT,()=>{setTalking(false);setReady(true);});};
     window.speechSynthesis.getVoices().length>0?setTimeout(go,600):(window.speechSynthesis.onvoiceschanged=()=>setTimeout(go,600));
@@ -1117,9 +1122,13 @@ export default function App() {
   const [readingCompleted,setReadingCompleted]=useState(true);
   const goTo=(n)=>{stopSpeech();setPage(n);};
 
+  // Grade from URL param: ?grade=K/1/2/3/4/5，默认 K
+  const grade = new URLSearchParams(window.location.search).get('grade') || 'K';
+  const gradeBand = ['3','4','5'].includes(grade) ? '3-5' : 'K-2';
+
   const renderPage=()=>{
     switch(page){
-      case 0: return <PageIntro    onNext={()=>goTo(1)}/>;
+      case 0: return <PageIntro    onNext={()=>goTo(1)} gradeBand={gradeBand}/>;
       case 1: return <PageWarmup   onNext={()=>goTo(2)}/>;
       case 2: return <PageEcho     onNext={()=>goTo(3)}/>;
       case 3: return <PageEchoComplete onNext={()=>goTo(4)}/>;

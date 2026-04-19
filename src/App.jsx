@@ -71,7 +71,12 @@ const KIRA_SCRIPTS = {
 };
 
 // ── Speech ────────────────────────────────────────────────────────────────────
-const speak = (text, onEnd) => {
+const ELEVENLABS_VOICE_ID = "XJ2fW4ybq7HouelYYGcL";
+let _audio = null;          // 当前 ElevenLabs Audio 实例
+let _fetchCtrl = null;      // 当前 fetch AbortController
+
+// Web Speech API fallback
+const _speakWebSpeech = (text, onEnd) => {
   if (!window.speechSynthesis) { onEnd?.(); return; }
   window.speechSynthesis.cancel();
   const utt = new SpeechSynthesisUtterance(text);
@@ -79,26 +84,51 @@ const speak = (text, onEnd) => {
   const voices = window.speechSynthesis.getVoices();
   const v = voices.find(v=>/samantha|karen|moira|victoria|zira|google us english/i.test(v.name)) || voices.find(v=>v.lang==="en-US") || voices[0];
   if(v) utt.voice=v;
-
-  let fired = false;
-  let resumeTimer;
-  // resumeTimer must be in fire's scope so fallbackTimer path also clears it
-  const fire = () => { if(!fired){ fired=true; clearInterval(resumeTimer); onEnd?.(); } };
-  const fallbackMs = Math.max(2000, (text.length / 12) * 1000 / 0.92 + 800);
-  const fallbackTimer = setTimeout(fire, fallbackMs);
-
-  // Chrome 长句子 bug：语音合成可能中途暂停，每500ms 强制 resume
-  resumeTimer = setInterval(() => {
-    if(window.speechSynthesis.paused) window.speechSynthesis.resume();
-  }, 500);
-
-  utt.onend  = () => { clearTimeout(fallbackTimer); fire(); };
-  utt.onerror= () => { clearTimeout(fallbackTimer); fire(); };
-
-  // Chrome cancel+speak race condition：等一个 tick 再播放
-  setTimeout(() => window.speechSynthesis.speak(utt), 50);
+  let fired=false, resumeTimer;
+  const fire=()=>{ if(!fired){ fired=true; clearInterval(resumeTimer); onEnd?.(); } };
+  const fallbackTimer=setTimeout(fire, Math.max(2000,(text.length/12)*1000/0.92+800));
+  resumeTimer=setInterval(()=>{ if(window.speechSynthesis.paused) window.speechSynthesis.resume(); },500);
+  utt.onend=()=>{ clearTimeout(fallbackTimer); fire(); };
+  utt.onerror=()=>{ clearTimeout(fallbackTimer); fire(); };
+  setTimeout(()=>window.speechSynthesis.speak(utt), 50);
 };
-const stopSpeech = () => window.speechSynthesis?.cancel();
+
+const speak = async (text, onEnd) => {
+  stopSpeech(); // 取消当前播放
+  const key = import.meta.env.VITE_ELEVENLABS_KEY;
+  if (!key) { _speakWebSpeech(text, onEnd); return; }
+
+  _fetchCtrl = new AbortController();
+  try {
+    const res = await fetch(`/api/elevenlabs/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`, {
+      method: "POST",
+      headers: { "xi-api-key": key, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        model_id: "eleven_turbo_v2_5",
+        voice_settings: { stability: 0.5, similarity_boost: 0.75 }
+      }),
+      signal: _fetchCtrl.signal
+    });
+    if (!res.ok) throw new Error(`ElevenLabs ${res.status}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    _audio = new Audio(url);
+    _audio.onended = () => { URL.revokeObjectURL(url); _audio=null; onEnd?.(); };
+    _audio.onerror = () => { URL.revokeObjectURL(url); _audio=null; onEnd?.(); };
+    _audio.play();
+  } catch(e) {
+    if (e.name === "AbortError") return; // 被 stopSpeech 取消，正常
+    console.warn("ElevenLabs failed, fallback to Web Speech:", e.message);
+    _speakWebSpeech(text, onEnd);
+  }
+};
+
+const stopSpeech = () => {
+  _fetchCtrl?.abort(); _fetchCtrl=null;
+  if(_audio){ _audio.pause(); _audio=null; }
+  window.speechSynthesis?.cancel();
+};
 
 // ── Kira 3D Character ─────────────────────────────────────────────────────────
 const KiraCharacter = ({ size=200, mood="neutral", talking=false, listening=false, celebrating=false }) => {

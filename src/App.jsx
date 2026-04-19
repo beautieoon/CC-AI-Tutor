@@ -446,7 +446,10 @@ const PageIntro = ({onNext, gradeBand="3-5"}) => {
           <span style={{fontSize:12,color:"#9B8FEE"}}>· Reading Buddy</span>
         </div>
         <div style={{display:"flex",gap:7,flexWrap:"wrap",justifyContent:"center",marginTop:14,maxWidth:360}}>
-          {["📚 Loves stories","🔭 Always curious","🤫 Good listener","✨ Finds magic in words"].map((t,i)=>(
+          {(gradeBand==="K-2"
+            ? ["🦋 Knows today's story","🎤 Loves hearing your voice","💡 Helps with the tricky parts","🌟 Cheers you on"]
+            : ["🔍 Asks the best questions","🎤 Actually listens","💡 Loves the hard parts","🌟 No wrong answers here"]
+          ).map((t,i)=>(
             <span key={i} style={{fontSize:11,background:"rgba(255,255,255,0.8)",border:"1.5px solid #D8D0FF",borderRadius:99,padding:"5px 12px",color:"#4B3DB5",fontWeight:500}}>{t}</span>
           ))}
         </div>
